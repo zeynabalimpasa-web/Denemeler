@@ -16,14 +16,22 @@
   .panel input[type=text] { flex:1 1 160px; min-width:0; font:600 18px/1.2 system-ui,sans-serif; letter-spacing:.06em;
     text-transform:uppercase; padding:8px 10px; border:1px solid #9aa6b5; border-radius:8px; }
   .panel label { display:flex; gap:6px; align-items:center; font-size:14px; white-space:nowrap; }
+  .zoom { display:flex; gap:6px; }
+  .zoom button { width:44px; height:40px; font:600 22px/1 system-ui,sans-serif; color:var(--fg); background:#fff;
+    border:1px solid #9aa6b5; border-radius:8px; cursor:pointer; touch-action:manipulation; }
+  .zoom button:active { transform:scale(.94); }
   .hint { position:fixed; top:14px; left:0; right:0; text-align:center; font-size:13px; opacity:.7; pointer-events:none; }
 </style>
 </head>
 <body>
-<div class="hint">Döndürmek için sürükleyin · Yakınlaştırmak için kaydırın</div>
+<div class="hint">Döndürmek için sürükleyin · Yakınlaştırmak için + / − düğmelerini kullanın</div>
 <canvas id="scene"></canvas>
 <div class="panel">
   <input id="plateText" type="text" maxlength="12" value="34 ABC 123" aria-label="Plaka yazısı">
+  <div class="zoom">
+    <button id="zoomOut" type="button" aria-label="Uzaklaştır">−</button>
+    <button id="zoomIn" type="button" aria-label="Yakınlaştır">+</button>
+  </div>
   <label><input id="spin" type="checkbox" checked> Otomatik dön</label>
 </div>
 
@@ -211,6 +219,9 @@
   }, { passive: false });
 
   document.getElementById('plateText').addEventListener('input', e => drawPlate(e.target.value));
+  const zoomBy = f => { dist = Math.max(4, Math.min(18, dist * f)); };
+  document.getElementById('zoomIn').addEventListener('click', () => zoomBy(0.8));
+  document.getElementById('zoomOut').addEventListener('click', () => zoomBy(1.25));
 
   function resize() {
     const w = window.innerWidth, h = window.innerHeight;
