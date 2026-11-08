@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>3D Plaka</title>
+<style>
+  :root { --bg1:#e9eef5; --bg2:#b9c4d3; --fg:#1b2430; --panel:rgba(255,255,255,.85); }
+  html,body { margin:0; height:100%; overflow:hidden; font-family:system-ui,-apple-system,"Segoe UI",sans-serif; color:var(--fg);
+    background: radial-gradient(ellipse at 50% 35%, var(--bg1), var(--bg2)); }
+  canvas#scene { display:block; width:100%; height:100%; cursor:grab; touch-action:none; }
+  canvas#scene:active { cursor:grabbing; }
+  .panel { position:fixed; left:16px; right:16px; bottom:16px; max-width:460px; margin:0 auto; padding:12px 14px;
+    background:var(--panel); border-radius:12px; box-shadow:0 6px 24px rgba(0,0,0,.15);
+    display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .panel input[type=text] { flex:1 1 160px; min-width:0; font:600 18px/1.2 system-ui,sans-serif; letter-spacing:.06em;
+    text-transform:uppercase; padding:8px 10px; border:1px solid #9aa6b5; border-radius:8px; }
+  .panel label { display:flex; gap:6px; align-items:center; font-size:14px; white-space:nowrap; }
+  .hint { position:fixed; top:14px; left:0; right:0; text-align:center; font-size:13px; opacity:.7; pointer-events:none; }
+</style>
+</head>
+<body>
+<div class="hint">Döndürmek için sürükleyin · Yakınlaştırmak için kaydırın</div>
+<canvas id="scene"></canvas>
+<div class="panel">
+  <input id="plateText" type="text" maxlength="12" value="34 ABC 123" aria-label="Plaka yazısı">
+  <label><input id="spin" type="checkbox" checked> Otomatik dön</label>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(() => {
+  // ---- Ölçüler (gerçek TR plakası 520 x 110 mm) ----
+  const W = 5.2, H = 1.1, R = 0.08, DEPTH = 0.03;
+
+  const canvas = document.getElementById('scene');
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.outputEncoding = THREE.sRGBEncoding;
+
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(35, 1, 0.1, 100);
+
+  // ---- Işıklar ----
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x8090a0, 0.65));
+  const key = new THREE.DirectionalLight(0xffffff, 0.9);
+  key.position.set(-3, 4, 6);
+  key.castShadow = true;
+  key.shadow.mapSize.set(2048, 2048);
+  Object.assign(key.shadow.camera, { left: -4, right: 4, top: 4, bottom: -4, near: 0.5, far: 20 });
+  key.shadow.radius = 4;
+  scene.add(key);
+  const rim = new THREE.DirectionalLight(0xcfe0ff, 0.45);
+  rim.position.set(4, -1, -4);
+  scene.add(rim);
+
+  // ---- Zemin (gölge için) ----
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(30, 30), new THREE.ShadowMaterial({ opacity: 0.22 }));
+  ground.rotation.x = -Math.PI / 2;
+  ground.position.y = -1.1;
+  ground.receiveShadow = true;
+  scene.add(ground);
+
+  // ---- Yardımcı: yuvarlak köşeli dikdörtgen ----
+  function roundedRect(w, h, r) {
+    const s = new THREE.Shape(), x = -w / 2, y = -h / 2;
+    s.moveTo(x + r, y);
+    s.lineTo(x + w - r, y); s.quadraticCurveTo(x + w, y, x + w, y + r);
+    s.lineTo(x + w, y + h - r); s.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    s.lineTo(x + r, y + h); s.quadraticCurveTo(x, y + h, x, y + h - r);
+    s.lineTo(x, y + r); s.quadraticCurveTo(x, y, x + r, y);
+    return s;
+  }
+
+  const plate = new THREE.Group();
+  scene.add(plate);
+
+  // ---- Alüminyum gövde ----
+  const bodyGeo = new THREE.ExtrudeGeometry(roundedRect(W, H, R), {
+    depth: DEPTH, bevelEnabled: true, bevelThickness: 0.012, bevelSize: 0.012, bevelSegments: 4, curveSegments: 12
+  });
+  bodyGeo.translate(0, 0, -DEPTH / 2);
+  const metal = new THREE.MeshStandardMaterial({ color: 0xd9dde2, metalness: 0.85, roughness: 0.35 });
+  const body = new THREE.Mesh(bodyGeo, metal);
+  body.castShadow = true;
+  body.receiveShadow = true;
+  plate.add(body);
+
+  // ---- Ön yüz dokusu (renk + kabartma haritası) ----
+  const TEX_W = 2080, TEX_H = 440;           // 4 px / mm
+  const colorCv = document.createElement('canvas');
+  const bumpCv  = document.createElement('canvas');
+  colorCv.width = bumpCv.width = TEX_W;
+  colorCv.height = bumpCv.height = TEX_H;
+
+  const colorTex = new THREE.CanvasTexture(colorCv);
+  const bumpTex  = new THREE.CanvasTexture(bumpCv);
+  colorTex.encoding = THREE.sRGBEncoding;
+  [colorTex, bumpTex].forEach(t => {
+    t.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    t.repeat.set(1 / W, 1 / H);   // ShapeGeometry UV = dünya koordinatı
+    t.offset.set(0.5, 0.5);
+  });
+
+  function rr(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+  }
+
+  function drawPlate(text) {
+    text = (text || '').toLocaleUpperCase('tr-TR').trim() || ' ';
+    const c = colorCv.getContext('2d'), b = bumpCv.getContext('2d');
+    const stripW = 160, pad = 18;
+
+    // Zemin
+    c.fillStyle = '#fbfbf8'; c.fillRect(0, 0, TEX_W, TEX_H);
+    b.fillStyle = '#000';    b.fillRect(0, 0, TEX_W, TEX_H);
+
+    // Mavi TR şeridi
+    c.fillStyle = '#123a9c';
+    rr(c, pad, pad, stripW, TEX_H - pad * 2, 22); c.fill();
+    c.fillStyle = '#fff';
+    c.font = 'bold 110px Arial, Helvetica, sans-serif';
+    c.textAlign = 'center'; c.textBaseline = 'alphabetic';
+    c.fillText('TR', pad + stripW / 2, TEX_H - pad - 40);
+
+    // Siyah kabartma çerçeve
+    const bw = 10;
+    [[c, '#111'], [b, '#fff']].forEach(([ctx, col]) => {
+      ctx.strokeStyle = col; ctx.lineWidth = bw;
+      rr(ctx, pad / 2 + bw / 2, pad / 2 + bw / 2, TEX_W - pad - bw, TEX_H - pad - bw, 30); ctx.stroke();
+    });
+
+    // Plaka yazısı (dar, kalın)
+    const areaX = pad + stripW + 30, areaW = TEX_W - areaX - 50;
+    const fontPx = 330;
+    [[c, '#111'], [b, '#fff']].forEach(([ctx, col]) => {
+      ctx.save();
+      ctx.font = `bold ${fontPx}px "Arial Narrow", Arial, Helvetica, sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      const m = ctx.measureText(text).width;
+      const sx = Math.min(0.82, areaW / m);   // yatayda daralt
+      ctx.translate(areaX + areaW / 2, TEX_H / 2 + 14);
+      ctx.scale(sx, 1);
+      ctx.fillStyle = col;
+      ctx.fillText(text, 0, 0);
+      ctx.restore();
+    });
+
+    // Kabartma kenarlarını yumuşat
+    b.filter = 'blur(3px)';
+    b.drawImage(bumpCv, 0, 0);
+    b.filter = 'none';
+
+    colorTex.needsUpdate = true;
+    bumpTex.needsUpdate = true;
+  }
+
+  const face = new THREE.Mesh(
+    new THREE.ShapeGeometry(roundedRect(W, H, R), 16),
+    new THREE.MeshStandardMaterial({
+      map: colorTex, bumpMap: bumpTex, bumpScale: 0.035,
+      roughness: 0.45, metalness: 0.1
+    })
+  );
+  face.position.z = DEPTH / 2 + 0.0125;
+  face.receiveShadow = true;
+  plate.add(face);
+
+  // ---- Vidalar ----
+  const screwGeo = new THREE.CylinderGeometry(0.05, 0.05, 0.02, 32);
+  screwGeo.rotateX(Math.PI / 2);
+  const screwMat = new THREE.MeshStandardMaterial({ color: 0xb8bcc2, metalness: 1, roughness: 0.25 });
+  const slotGeo = new THREE.BoxGeometry(0.07, 0.012, 0.012);
+  const slotMat = new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.8 });
+  [-1, 1].forEach(sx => {
+    const s = new THREE.Mesh(screwGeo, screwMat);
+    s.position.set(sx * (W / 2 - 0.35), 0, face.position.z + 0.01);
+    s.castShadow = true;
+    const slot = new THREE.Mesh(slotGeo, slotMat);
+    slot.position.z = 0.008;
+    slot.rotation.z = sx * 0.6;
+    s.add(slot);
+    plate.add(s);
+  });
+
+  // ---- Etkileşim: sürükle-döndür, kaydır-yakınlaştır ----
+  let rotX = -0.18, rotY = 0.5, velY = 0, dragging = false, lastX = 0, lastY = 0;
+  let dist = 9;
+  const spinBox = document.getElementById('spin');
+
+  canvas.addEventListener('pointerdown', e => {
+    dragging = true; lastX = e.clientX; lastY = e.clientY; canvas.setPointerCapture(e.pointerId);
+  });
+  canvas.addEventListener('pointermove', e => {
+    if (!dragging) return;
+    const dx = e.clientX - lastX, dy = e.clientY - lastY;
+    lastX = e.clientX; lastY = e.clientY;
+    rotY += dx * 0.008; velY = dx * 0.008;
+    rotX = Math.max(-1.2, Math.min(1.2, rotX + dy * 0.008));
+  });
+  const end = () => { dragging = false; };
+  canvas.addEventListener('pointerup', end);
+  canvas.addEventListener('pointercancel', end);
+  canvas.addEventListener('wheel', e => {
+    e.preventDefault();
+    dist = Math.max(4, Math.min(18, dist * (1 + Math.sign(e.deltaY) * 0.08)));
+  }, { passive: false });
+
+  document.getElementById('plateText').addEventListener('input', e => drawPlate(e.target.value));
+
+  function resize() {
+    const w = window.innerWidth, h = window.innerHeight;
+    renderer.setSize(w, h, false);
+    camera.aspect = w / h;
+    // Dar ekranlarda plakanın sığması için kamerayı uzaklaştır
+    camera.userData.fit = Math.max(1, 1.6 / camera.aspect);
+    camera.updateProjectionMatrix();
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  const clock = new THREE.Clock();
+  function animate() {
+    const dt = Math.min(clock.getDelta(), 0.05);
+    if (!dragging) {
+      if (spinBox.checked) rotY += dt * 0.5;
+      else { rotY += velY; velY *= 0.92; }
+    }
+    plate.rotation.set(rotX, rotY, 0);
+    const d = dist * camera.userData.fit;
+    camera.position.set(0, 0.6, d);
+    camera.lookAt(0, 0, 0);
+    renderer.render(scene, camera);
+    requestAnimationFrame(animate);
+  }
+
+  drawPlate(document.getElementById('plateText').value);
+  animate();
+})();
+</script>
+</body>
+</html>
