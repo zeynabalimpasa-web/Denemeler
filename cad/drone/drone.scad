@@ -37,6 +37,8 @@ kamera_w        = 19;    // micro FPV kamera genişliği (nominal)
 kamera_vida_h   = 12;    // yan vida deliğinin yüksekliği
 kamera_duvar    = 2;
 kamera_taban_t  = 2.5;
+kamera_eksen_y  = 19.5;  // kamera mil ekseninin direk deliklerine uzaklığı (eğim boşluğu için)
+kamera_ray_w    = 4;     // tabanın yan rayları (duvarları taşır)
 
 /* [Tolerans] */
 // Delikler nominal ölçüde (ISO 273 orta seri geçme) çizilir; FDM'de delikler
@@ -122,16 +124,20 @@ module ust_plaka() linear_extrude(ust_t) difference() {
     rect([10, 24], rounding = 4);
 }
 
-kamera_taban = [govde.x - 2, 18];
 kamera_taban_y0 = -4;              // tabanın arka kenarı (delik ekseni y = 0)
-kamera_duvar_y = [3, 11];
+kamera_duvar_y = [kamera_eksen_y - 4, kamera_eksen_y + 4];
+kamera_taban = [govde.x - 2, kamera_duvar_y[1] - kamera_taban_y0];
+kamera_kiris_y = 4;                // arka kirişin ön kenarı (kamera altı açık)
 
 module kamera_tutucu() {
     ic = kamera_ic + fdm_komp;
     difference() {
         union() {
-            translate([0, kamera_taban_y0 + kamera_taban.y/2, 0])
-                cuboid([kamera_taban.x, kamera_taban.y, kamera_taban_t], rounding = 1, edges = "Z", anchor = BOTTOM);
+            // U biçimli taban: arka kiriş (direk delikleri) + iki yan ray; kamera altı açık
+            translate([0, (kamera_taban_y0 + kamera_kiris_y)/2, 0])
+                cuboid([kamera_taban.x, kamera_kiris_y - kamera_taban_y0, kamera_taban_t], rounding = 1, edges = "Z", anchor = BOTTOM);
+            for (sx = [-1, 1]) translate([sx * (ic/2 + kamera_ray_w/2), (kamera_taban_y0 + kamera_duvar_y[1])/2, 0])
+                cuboid([kamera_ray_w, kamera_duvar_y[1] - kamera_taban_y0, kamera_taban_t], rounding = 1, edges = "Z", anchor = BOTTOM);
             for (sx = [-1, 1]) translate([sx * (ic/2 + kamera_duvar/2), mean(kamera_duvar_y), 0])
                 cuboid([kamera_duvar, kamera_duvar_y[1] - kamera_duvar_y[0], duvar_h],
                        rounding = 1, edges = "Z", anchor = BOTTOM);
@@ -152,8 +158,8 @@ module montaj() {
     color("#c0392b") translate([0, direk_desen.y/2, on_ped_h]) kamera_tutucu();
     color("#999") for (d = direkler) translate([d.x, d.y, arka_ped_h]) cylinder(h = direk_h, d = 5, $fn = 6);
     color("#1e8449") up(alt_t + 4) cuboid([27, 27, 1.6], rounding = 2, edges = "Z", anchor = BOTTOM);
-    color("#222") translate([0, direk_desen.y/2 + 7, on_ped_h + kamera_vida_h - kamera_w/2 + 2.5])
-        cuboid([kamera_w, 18, kamera_w], anchor = BOTTOM);
+    color("#222") translate([0, direk_desen.y/2 + kamera_eksen_y, on_ped_h + kamera_vida_h])
+        xrot(25) cuboid([kamera_w, 19, kamera_w]);  // 25° yukarı eğik kamera
     color("#ffb000", 0.85) up(ust_z + ust_t) cuboid([30, 50, 18], rounding = 2, anchor = BOTTOM);
     for (p = motorlar) translate([p.x, p.y, kol_t]) {
         color("#666") cylinder(h = 12, d = 18);
@@ -192,9 +198,9 @@ T_gercek  = 2 * sqrt(2) * desen_tol;        // ±desen_tol (x,y) → çap. konum
 // 2) Kamera geçmesi
 kam_min = kamera_ic - (kamera_w + kamera_tol);
 kam_max = kamera_ic + delik_tol[0] - (kamera_w - kamera_tol);
-// 3) Kamera duvarı – üst plaka boşluğu: taban + direk − duvar
-bosluk_nom = kamera_taban_t + direk_h - duvar_h;
-bosluk_tol = [kalinlik_tol, direk_tol, genel_tol];
+// 3) Kamera konumu: kameranın köşegen yarıçapı üst plakanın ön kenarını geçmeli
+kam_yaricap = sqrt(2) * kamera_w / 2;
+kam_on_bosluk = kamera_eksen_y - kam_yaricap - (govde.y/2 - direk_desen.y/2);
 // 4) Direk oturma düzlemi farkı (ön: ped + kamera tabanı, arka: yüksek ped)
 duzlem_tol = [kalinlik_tol, kalinlik_tol, kalinlik_tol];
 egim = atan(wc_tol(duzlem_tol) / direk_desen.y);
@@ -218,9 +224,8 @@ echo(str("Delik hizası M2: izin ", r2(T_izin_M2), " mm, gerçek ", r2(T_gercek)
          T_gercek <= T_izin_M2 ? "  ✓" : "  ⚠"));
 echo(str("Kamera geçmesi: yuva ", kamera_ic, " +", delik_tol[0], "/0, kamera ", kamera_w, " ±", kamera_tol,
          " → boşluk ", r2(kam_min), "…", r2(kam_max), " mm", kam_min > 0 ? "  ✓ (boşluklu geçme)" : "  ⚠ sıkı"));
-echo(str("Duvar–üst plaka boşluğu: ", r2(bosluk_nom), " mm, WC ±", r2(wc_tol(bosluk_tol)),
-         ", RSS ±", r2(rss_tol(bosluk_tol)), " → min ", r2(bosluk_nom - wc_tol(bosluk_tol)), " mm",
-         bosluk_nom - wc_tol(bosluk_tol) > 1 ? "  ✓" : "  ⚠"));
+echo(str("Kamera dönme dairesi – plaka ön kenarı: ", r2(kam_on_bosluk), " mm",
+         kam_on_bosluk > 0.5 ? "  ✓ (kamera her eğimde plakaların önünde)" : "  ⚠ kamera eğilince plakaya çarpar"));
 echo(str("Direk düzlem farkı: 0 ± ", r2(wc_tol(duzlem_tol)), " mm (WC) → üst plaka eğimi maks ",
          r2(egim), "°", egim < 1 ? "  ✓" : "  ⚠"));
 echo(str("Direk ekseni–kol ekseni: ", r2(kol_eksen_mesafe), " mm (kol yarı gen. ", kol_w/2,
@@ -235,12 +240,11 @@ echo(str("CIZIM{",
   ",\"on_ped_h\":", on_ped_h, ",\"arka_ped_h\":", arka_ped_h, ",\"direk_h\":", direk_h,
   ",\"kamera_taban\":", kamera_taban, ",\"kamera_taban_t\":", kamera_taban_t, ",\"kamera_taban_y0\":", kamera_taban_y0,
   ",\"kamera_duvar_y\":", kamera_duvar_y, ",\"kamera_ic\":", kamera_ic, ",\"kamera_duvar\":", kamera_duvar,
-  ",\"duvar_h\":", duvar_h, ",\"kamera_vida_h\":", kamera_vida_h,
+  ",\"duvar_h\":", duvar_h, ",\"kamera_vida_h\":", kamera_vida_h, ",\"kamera_eksen_y\":", kamera_eksen_y, ",\"kamera_ray_w\":", kamera_ray_w, ",\"kamera_kiris_y\":", kamera_kiris_y, ",\"kamera_tol\":", kamera_tol, ",\"direk_tol\":", direk_tol, ",\"kamera_w\":", kamera_w,
   ",\"fdm_komp\":", fdm_komp, ",\"delik_tol\":", delik_tol, ",\"desen_tol\":", desen_tol,
   ",\"kalinlik_tol\":", kalinlik_tol, ",\"genel_tol\":", genel_tol, ",\"kutle\":", round(kutle),
   ",\"kam_bosluk\":[", r2(kam_min), ",", r2(kam_max), "]",
   ",\"T_izin\":", r2(T_izin_M3), ",\"T_gercek\":", r2(T_gercek),
-  ",\"duvar_bosluk\":[", r2(bosluk_nom), ",", r2(wc_tol(bosluk_tol)), ",", r2(rss_tol(bosluk_tol)), "]",
   ",\"egim\":", r2(egim), "}"));
 
 // ── Ana ────────────────────────────────────────────────────────

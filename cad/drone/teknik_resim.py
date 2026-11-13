@@ -10,6 +10,9 @@ PDF/PNG için Node + Playwright (Chromium) gerekir.
 """
 import base64, json, math, os, re, subprocess, sys, tempfile, datetime
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import tolerans_analizi
+
 KOK = os.path.dirname(os.path.abspath(__file__))
 SCAD = os.path.join(KOK, "drone.scad")
 CIKTI = os.path.join(KOK, "teknik_resim")
@@ -42,8 +45,9 @@ def fmt(v):
     return f"{v:.2f}".rstrip("0").rstrip(".")
 
 class Sayfa:
-    def __init__(self, baslik, no, olcek, w=420, h=297):
+    def __init__(self, baslik, no, olcek, w=420, h=297, toplam=5):
         self.w, self.h, self.e, self.defs = w, h, [], []
+        self.toplam = toplam
         self.baslik, self.no, self.olcek = baslik, no, olcek
         self.clip = 0
 
@@ -146,7 +150,7 @@ class Sayfa:
         self.yazi((x0 + 90, y0 + 7.2), self.baslik, size=5, bold=True)
         self.yazi((x0 + 90, y0 + 16.5), "3\" FPV Quadcopter Gövdesi — drone.scad", size=3.2)
         alanlar = [("Malzeme", malzeme), ("Ölçek", self.olcek), ("Resim no", f"DRN-{self.no:03d}"),
-                   ("Sayfa", f"{self.no}/4"), ("Tarih", TARIH), ("Birim", "mm"),
+                   ("Sayfa", f"{self.no}/{self.toplam}"), ("Tarih", TARIH), ("Birim", "mm"),
                    ("İzdüşüm", "ISO E (1. açı)"), ("Format", "A3")]
         for i, (k, val) in enumerate(alanlar):
             cx, cy = x0 + (i % 4) * 45, y0 + 20 + (i // 4) * 10
@@ -293,50 +297,63 @@ def sayfa_ust(D):
 
 # ── Sayfa 3: Kamera tutucu ───────────────────────────────────────
 def sayfa_kamera(D):
-    S = Sayfa("FPV KAMERA TUTUCU", 3, "4:1")
+    S = Sayfa("FPV KAMERA TUTUCU", 3, "3:1")
     bx, by = D["kamera_taban"]; t = D["kamera_taban_t"]; y0 = D["kamera_taban_y0"]
     ic = D["kamera_ic"]; dw = D["kamera_duvar"]; hw = D["duvar_h"]; vh = D["kamera_vida_h"]
-    wy = D["kamera_duvar_y"]; dx = D["direk_desen"][0]
-    on = V(135, 105, 4); yan = V(320, 105, 4); u = V(135, 196, 4)
-    S.gorunus(on, izdusum("kamera", "on"), ((135, 26), "ÖN GÖRÜNÜŞ"))
-    S.gorunus(yan, izdusum("kamera", "yan"), ((320, 26), "SOLDAN GÖRÜNÜŞ"))
-    S.gorunus(u, izdusum("kamera", "ust"), ((135, 236), "ÜSTTEN GÖRÜNÜŞ"))
+    wy = D["kamera_duvar_y"]; dx = D["direk_desen"][0]; ey = D["kamera_eksen_y"]
+    ky = D["kamera_kiris_y"]; rw = D["kamera_ray_w"]; y1 = wy[1]
+    on = V(135, 92, 3); yan = V(330, 92, 3); u = V(135, 210, 3)
+    S.gorunus(on, izdusum("kamera", "on"), ((135, 24), "ÖN GÖRÜNÜŞ"))
+    S.gorunus(yan, izdusum("kamera", "yan"), ((300, 24), "SOLDAN GÖRÜNÜŞ"))
+    S.gorunus(u, izdusum("kamera", "ust"), ((135, 246), "ÜSTTEN GÖRÜNÜŞ"))
     # Ön görünüşte gizli teardrop delikleri (kesikli)
     dd = D["M2"] / 2
     for sx in (-1, 1):
         x1, x2 = sorted((sx * ic/2, sx * (ic/2 + dw)))
-        for z in (vh - dd, vh + dd):
+        for z in (vh - dd, vh + dd, vh + dd * 1.414):
             S.cizgi(on.P(x1, z), on.P(x2, z), w=0.3, dash="2 1")
-        S.cizgi(on.P(x1, vh + dd * 1.414), on.P(x2, vh + dd * 1.414), w=0.3, dash="2 1")
-    S.olcu(on.P(-bx/2, 0), on.P(bx/2, 0), -12, fmt(bx), TOL(D))
+    S.olcu(on.P(-bx/2, 0), on.P(bx/2, 0), -10, fmt(bx), TOL(D))
     S.olcu(on.P(-ic/2, hw), on.P(ic/2, hw), 6, fmt(ic), DTOL(D))
     S.olcu(on.P(ic/2, hw), on.P(ic/2 + dw, hw), 6, fmt(dw), TOL(D), ic=False)
-    S.olcu(on.P(-bx/2, 0), on.P(-bx/2, t), 8, fmt(t), KTOL(D), ic=False)
-    S.olcu(on.P(-ic/2 - dw, 0), on.P(-ic/2 - dw, hw), 22, fmt(hw), TOL(D))
+    S.olcu(on.P(bx/2, 0), on.P(bx/2, t), -8, fmt(t), KTOL(D), ic=False)
+    S.olcu(on.P(-ic/2 - dw, 0), on.P(-ic/2 - dw, hw), 24, fmt(hw), TOL(D))
     # Soldan görünüş (mx = −y, my = z)
-    S.olcu(yan.P(-wy[1], 0), yan.P(-wy[1], vh), 10, fmt(vh), PTOL(D))
-    S.eksen(yan.P(-(wy[0]+wy[1])/2, vh), yan.r(D["M2"]))
-    c = yan.P(-(wy[0]+wy[1])/2, vh); q = yan.r(D["M2"]) * 0.7071
-    S.kilavuz((c[0]+q, c[1]-q), (c[0]+26, c[1]-26), f"Ø{fmt(D['M2'])} teardrop", DTOL(D))
-    S.olcu(yan.P(-wy[1], hw), yan.P(-wy[0], hw), 6, fmt(wy[1]-wy[0]), TOL(D))
-    S.olcu(yan.P(-(by + y0), 0), yan.P(-y0, 0), -12, fmt(by), TOL(D))
+    for m in (0, -ey):   # direk deliği ve kamera ekseni
+        S.cizgi(yan.P(m, -3), yan.P(m, (hw + 3) if m else (vh + 3)), w=0.18, dash="4 1 0.6 1")
+    S.eksen(yan.P(-ey, vh), yan.r(D["M2"]))
+    S.olcu(yan.P(-y1, 0), yan.P(-y1, vh), 10, fmt(vh), PTOL(D))
+    c = yan.P(-ey, vh); q = yan.r(D["M2"]) * 0.7071
+    S.kilavuz((c[0]+q, c[1]-q), (c[0]+30, c[1]-26), f"Ø{fmt(D['M2'])} teardrop", DTOL(D))
+    S.olcu(yan.P(-y1, hw), yan.P(-wy[0], hw), 6, fmt(wy[1]-wy[0]), TOL(D))
+    S.olcu(yan.P(-y1, 0), yan.P(-y0, 0), -10, fmt(by), TOL(D))
+    S.olcu(yan.P(-ey, 0), yan.P(0, 0), -19, fmt(ey), PTOL(D))
     # Üstten görünüş
     for sx in (-1, 1): S.eksen(u.P(sx*dx/2, 0), u.r(D["M3"]))
-    S.olcu(u.P(-dx/2, 0), u.P(dx/2, 0), -12 - 4*(-y0), fmt(dx), PTOL(D))
-    S.olcu(u.P(bx/2, y0), u.P(bx/2, 0), -10, fmt(-y0), PTOL(D), ic=False)
-    S.olcu(u.P(bx/2, 0), u.P(bx/2, (wy[0]+wy[1])/2), -22, fmt((wy[0]+wy[1])/2), PTOL(D), ic=False)
+    S.eksen(u.P(0, ey), 0)
+    S.olcu(u.P(-dx/2, 0), u.P(dx/2, 0), -20, fmt(dx), PTOL(D))
+    S.olcu(u.P(bx/2, y0), u.P(bx/2, 0), -8, fmt(-y0), PTOL(D), ic=False)
+    S.olcu(u.P(bx/2, y0), u.P(bx/2, ky), -17, fmt(ky - y0), TOL(D))
+    S.olcu(u.P(bx/2, 0), u.P(bx/2, ey), -26, fmt(ey), PTOL(D))
+    S.olcu(u.P(bx/2, y0), u.P(bx/2, y1), -35, fmt(by), TOL(D))
+    S.olcu(u.P(ic/2, y1), u.P(ic/2 + rw, y1), 6, fmt(rw), TOL(D), ic=False)
     c = u.P(-dx/2, 0); q = u.r(D["M3"]) * 0.7071
-    S.kilavuz((c[0]-q, c[1]-q), (c[0]-20, c[1]-26), f"2× Ø{fmt(D['M3'])}", DTOL(D), sag=False)
-    S.yazi((250, 140), f"Kamera yuvası {fmt(ic)} +{fmt(D['delik_tol'][0])}/0 ↔ kamera {fmt(ic - 0.4)} ±0.1", size=3, anchor="start")
-    S.yazi((250, 146), f"→ boşluklu geçme, boşluk {fmt(D['kam_bosluk'][0])}…{fmt(D['kam_bosluk'][1])} mm", size=3, anchor="start")
-    S.yazi((250, 152), "Yan delikler destek gerektirmeyen teardrop", size=3, anchor="start")
-    S.yazi((250, 158), "biçimindedir (sivri uç yukarı, 45°).", size=3, anchor="start")
-    S.yazi((250, 164), "Dış dikey köşeler R1.", size=3, anchor="start")
+    S.kilavuz((c[0]-q, c[1]+q), (c[0]-20, c[1]+14), f"2× Ø{fmt(D['M3'])}", DTOL(D), sag=False)
+    notlar = [
+        f"Kamera yuvası {fmt(ic)} +{fmt(D['delik_tol'][0])}/0 ↔ kamera {fmt(D['kamera_w'])} ±{fmt(D['kamera_tol'])}",
+        f"→ boşluklu geçme, boşluk {fmt(D['kam_bosluk'][0])}…{fmt(D['kam_bosluk'][1])} mm (Z3).",
+        f"Kamera ekseni direk deliklerinden {fmt(ey)} mm önde ve taban",
+        "U biçimlidir (kamera altı açık): kamera 0–40° eğimde",
+        "tabana ve üst plakaya çarpmaz (K1, DRN-005).",
+        "Yan delikler destek gerektirmeyen teardrop biçimindedir",
+        "(sivri uç yukarı, 45°). Dış dikey köşeler R1.",
+    ]
+    for i, n in enumerate(notlar):
+        S.yazi((240, 150 + 6 * i), n, size=3, anchor="start")
     S.cerceve("PETG", genel_notlar(D))
     return S
 
 # ── Sayfa 4: Montaj + tolerans analizi + parça listesi ──────────
-def sayfa_montaj(D, kontroller):
+def sayfa_montaj(D, kontroller, Z, P, K):
     S = Sayfa("MONTAJ, PARÇA LİSTESİ, TOLERANS ANALİZİ", 4, "—")
     png = os.path.join(KOK, "cikti", "montaj.png")
     if os.path.exists(png):
@@ -363,24 +380,22 @@ def sayfa_montaj(D, kontroller):
            ["2", "Üst plaka", "PETG baskı (DRN-002)", "1"],
            ["3", "Kamera tutucu", "PETG baskı (DRN-003)", "1"],
            ["4", f"Direk M3×{fmt(D['direk_h'])} (dişi-dişi)", "Alüminyum, ticari", "4"],
-           ["5", "Vida M3×10 (alt)", "ISO 7380, çelik", "4"],
+           ["5", "Vida M3×12 (alt)", "ISO 7380, çelik (bkz. Z5)", "4"],
            ["6", "Vida M3×6 (üst)", "ISO 7380, çelik", "4"],
            ["7", "Motor vidası M2×7", "ISO 7380 (sargıya değmemeli)", "16"],
            ["8", "Kamera vidası M2×4", "Kamera ile birlikte", "2"],
            ["9", "FC montaj seti 20×20 M2", "Silikon sönümleyicili", "1"],
            ["10", "Batarya kayışı 15 mm", "Ticari", "1"]]
     yb = tablo(225, 20, "PARÇA LİSTESİ", [10, 55, 100, 15], bom)
-    kam = D["kam_bosluk"]; db = D["duvar_bosluk"]
-    tol = [["Zincir / kontrol", "Yöntem", "Sonuç", ""],
-           [f"Direk delik hizası (M3, H={fmt(D['M3'])}, F=3.0)", "T = H − F (serbest)", f"izin {fmt(D['T_izin'])}, gerçek {fmt(D['T_gercek'])}", "✓"],
-           [f"FC / motor delik hizası (M2, H={fmt(D['M2'])}, F=2.0)", "T = H − F (serbest)", f"izin 0.4, gerçek {fmt(D['T_gercek'])}", "✓"],
-           [f"Kamera yuvası {fmt(D['kamera_ic'])}+0.2/0 ↔ kamera 19±0.1", "En kötü durum", f"boşluk {fmt(kam[0])} … {fmt(kam[1])}", "✓"],
-           ["Duvar–üst plaka: taban + direk − duvar", "WC / RSS", f"{fmt(db[0])} ±{fmt(db[1])} (RSS ±{fmt(db[2])})", "✓"],
-           ["Direk oturma düzlemi (ön ↔ arka ped)", "WC (3 kalınlık)", f"0 ±0.3 → eğim ≤ {fmt(D['egim'])}°", "✓"]]
-    yt = tablo(225, yb + 12, "TOLERANS ANALİZİ", [72, 33, 66, 9], tol, size=2.5)
-    S.yazi((225, yt + 7), "T = H_min − F_max: serbest bağlantı elemanı için izin verilen çapsal konum toleransı.", size=2.5, anchor="start")
-    S.yazi((225, yt + 11.5), f"Desen ±{fmt(D['desen_tol'])} (x,y) → çapsal konum toleransı 2·√2·{fmt(D['desen_tol'])} = {fmt(D['T_gercek'])}.", size=2.5, anchor="start")
-    S.yazi((225, yt + 16), "RSS: istatistiksel (√Σt²); WC: en kötü durum (Σ|t|).", size=2.5, anchor="start")
+    tol = [["Kod", "Zincir / kontrol", "Sonuç (WC veya MC)", ""]]
+    for z in Z:
+        r = z.sonuc
+        tol.append([z.kod, z.ad, f"{r['wc'][0]:.2f} … {r['wc'][1]:.2f} mm", r["durum"]])
+    tol.append([P["kod"], P["ad"], f"marj ≥ {P['wc'][0]:.2f} mm (WC)", P["durum"]])
+    for k in K:
+        tol.append([k["kod"], k["ad"], f"min boşluk {k['nom']:.2f} mm", k["durum"]])
+    yt = tablo(225, yb + 12, "TOLERANS ANALİZİ ÖZETİ (ayrıntı: DRN-005)", [11, 92, 68, 9], tol, size=2.4, sh=4.8)
+    S.yazi((225, yt + 6), "✗ işaretli satırlar eski/değiştirilen tasarımdır; parça listesi ve kamera tutucu düzeltilmiştir.", size=2.4, anchor="start")
     y = 172
     S.yazi((25, y), "TASARIM KONTROLLERİ (drone.scad çıktısı)", size=3.6, anchor="start", bold=True)
     for i, k in enumerate(kontroller):
@@ -406,8 +421,11 @@ const { chromium } = require('playwright');
 def main():
     os.makedirs(CIKTI, exist_ok=True)
     D, kontroller = olculer()
-    sayfalar = [sayfa_alt(D), sayfa_ust(D), sayfa_kamera(D), sayfa_montaj(D, kontroller)]
-    adlar = ["DRN-001_alt_govde", "DRN-002_ust_plaka", "DRN-003_kamera_tutucu", "DRN-004_montaj_tolerans"]
+    Z, P, K = tolerans_analizi.analiz(D)
+    sayfalar = [sayfa_alt(D), sayfa_ust(D), sayfa_kamera(D), sayfa_montaj(D, kontroller, Z, P, K),
+                tolerans_analizi.sayfa(D, Z, P, K, Sayfa, 5, 5)]
+    adlar = ["DRN-001_alt_govde", "DRN-002_ust_plaka", "DRN-003_kamera_tutucu", "DRN-004_montaj_tolerans",
+             "DRN-005_tolerans_analizi"]
     for s, ad in zip(sayfalar, adlar):
         open(os.path.join(CIKTI, ad + ".svg"), "w").write(s.svg())
     html = os.path.join(TMP, "resim.html")
